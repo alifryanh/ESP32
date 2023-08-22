@@ -1,0 +1,96 @@
+import json
+import mysql.connector
+import paho.mqtt.client as mqtt
+
+# MySQL Database Configuration
+db_config = {
+    "host": "localhost",
+    "user": "username",
+    "password": "password",
+    "database": "your_database"
+}
+
+# MQTT Configuration for Node to Gateway
+node_mqtt_config = {
+    "server": "mosquito",
+    "port": 1883,
+    "client_id": "Rayen",
+    "topic": "voltage/DATA/LOCAL/SENSOR/PANEL_1"
+}
+
+# MQTT Configuration for Gateway to Server
+cloud_mqtt_config = {
+    "server": "tailor.cloudmqtt.com",
+    "port": 16144,
+    "client_id": "Rayen",
+    "username": "uinfmnbq",
+    "password": "b2vg8UYSyRii",
+    "topic": "voltage/DATA/ONLINE/SENSOR/PANEL_1"
+}
+
+# Initialize MySQL connection
+db_connection = mysql.connector.connect(**db_config)
+db_cursor = db_connection.cursor()
+
+# Initialize local MQTT client for Node to Gateway
+node_mqtt_client = mqtt.Client(client_id=node_mqtt_config["client_id"])
+
+# Callback when local MQTT client connects
+def on_node_connect(client, userdata, flags, rc):
+    print("Connected to local MQTT broker with result code " + str(rc))
+    node_mqtt_client.subscribe(node_mqtt_config["topic"])
+
+# Callback when local MQTT message is received
+def on_node_message(client, userdata, msg):
+    try:
+        payload = json.loads(msg.payload)
+        device_id = payload["deviceID"]
+        voltage = payload["data"]["v"]
+        current = payload["data"]["i"]
+        power = payload["data"]["pa"]
+        temperature = payload["data"]["temp"]
+        fan_status = payload["data"]["fan"]
+        timestamp = payload["data"]["time"]
+
+        # Store data in the local MySQL database
+        insert_query = "INSERT INTO sensor_data (device_id, voltage, current, power, temperature, fan_status, timestamp) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        data_values = (device_id, voltage, current, power, temperature, fan_status, timestamp)
+        db_cursor.execute(insert_query, data_values)
+        db_connection.commit()
+
+        print("Data stored in the local database")
+
+        # Forward data to the cloud MQTT server
+        cloud_mqtt_client.publish(cloud_mqtt_config["topic"], json.dumps(payload))
+
+    except Exception as e:
+        print("Error processing local MQTT message:", str(e))
+
+# Set local MQTT callbacks
+node_mqtt_client.on_connect = on_node_connect
+node_mqtt_client.on_message = on_node_message
+
+# Connect to local MQTT broker
+node_mqtt_client.connect(node_mqtt_config["server"], node_mqtt_config["port"])
+
+# Start the local MQTT loop
+node_mqtt_client.loop_start()
+
+# Initialize remote MQTT client for Gateway to Server
+cloud_mqtt_client = mqtt.Client(client_id=cloud_mqtt_config["client_id"])
+cloud_mqtt_client.username_pw_set(username=cloud_mqtt_config["username"], password=cloud_mqtt_config["password"])
+
+# Connect to cloud MQTT broker
+cloud_mqtt_client.connect(cloud_mqtt_config["server"], cloud_mqtt_config["port"])
+
+try:
+    while True:
+        pass  # Keep the program running
+
+except KeyboardInterrupt:
+    print("Gateway program stopped")
+    node_mqtt_client.disconnect()
+    node_mqtt_client.loop_stop()
+    cloud_mqtt_client.disconnect()
+    db_cursor.close()
+    db_connection.close()
