@@ -1,0 +1,86 @@
+#include <ModbusMaster.h>
+#include <PubSubClient.h>
+#include <WiFi.h>
+
+// Modbus and sensor configuration
+ModbusMaster node;
+int temperatureSensorRegister = 0x03E8;
+int powerMeterVoltageRegister = 0x0123;
+int powerMeterCurrentRegister = 0x0234;
+int powerMeterPowerRegister = 0x0345;
+float normalTemperature = 27.0;
+int coolerFanPin = 2; // Replace with actual pin
+String fanStatus = "OFF";
+
+// MQTT configuration
+const char* mqttServer = "mosquito";
+const int mqttPort = 1883;
+const char* clientId = "Rayen-node"; // Changed the deviceID
+const char* mqttTopic = "voltage/DATA/LOCAL/SENSOR/PANEL_1";
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
+void setup() {
+  Serial.begin(9600);
+  node.begin(1, Serial);
+  pinMode(coolerFanPin, OUTPUT);
+  setupWifi();
+  mqttClient.setServer(mqttServer, mqttPort);
+}
+
+void loop() {
+  node.readHoldingRegisters(temperatureSensorRegister, 1);
+  float temperature = node.getResponseBuffer(0);
+
+  node.readHoldingRegisters(powerMeterVoltageRegister, 3);
+  float voltage = node.getResponseBuffer(0);
+  float current = node.getResponseBuffer(1);
+  float power = node.getResponseBuffer(2);
+
+  if (temperature > normalTemperature * 1.02) {
+    digitalWrite(coolerFanPin, HIGH);
+    fan = "ON";
+  } else {
+    digitalWrite(coolerFanPin, LOW);
+    fan = "OFF";
+  }
+
+  publishDataToMQTT(voltage, current, power, temperature, fan);
+  delay(1000);
+}
+
+void setupWifi() {
+  // Set up WiFi connection
+  // Replace with your WiFi credentials
+  const char* ssid = "your-ssid";
+  const char* password = "your-password";
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+  }
+}
+
+void publishDataToMQTT(float voltage, float current, float power, float temperature, String fanStatus) {
+  if (!mqttClient.connected()) {
+    reconnectMQTT();
+  }
+
+  String payload = "{\"status\":\"OK\",\"deviceID\":\"Rayen\",\"data\":{";
+  payload += "\"v\":\"" + String(voltage) + "\",";
+  payload += "\"i\":\"" + String(current) + "\",";
+  payload += "\"pa\":\"" + String(power) + "\",";
+  payload += "\"temp\":\"" + String(temperature) + "\",";
+  payload += "\"fan\":\"" + fanStatus + "\"";
+  payload += "}}";
+
+  mqttClient.publish(mqttTopic, payload.c_str());
+}
+
+void reconnectMQTT() {
+  while (!mqttClient.connected()) {
+    if (mqttClient.connect(clientId)) {
+      mqttClient.subscribe(mqttTopic);
+    }
+    delay(1000);
+  }
+}
